@@ -63,7 +63,11 @@ def decode_hparams(overrides=""):
       shards=1,
       shard_id=0,
       num_decodes=1,
-      force_decode_length=False)
+      force_decode_length=False,
+      display_decoded_images=False,
+      # Used for video decoding.
+      frames_per_second=10,
+      skip_eos_postprocess=False)
   hp.parse(overrides)
   return hp
 
@@ -141,7 +145,8 @@ def decode_from_dataset(estimator,
                         hparams,
                         decode_hp,
                         decode_to_file=None,
-                        dataset_split=None):
+                        dataset_split=None,
+                        checkpoint_path=None):
   """Perform decoding from dataset."""
   tf.logging.info("Performing local inference from dataset for %s.",
                   str(problem_name))
@@ -185,7 +190,8 @@ def decode_from_dataset(estimator,
                          decode_hp,
                          decode_to_file,
                          output_dir,
-                         log_results=not decode_hp.decode_in_memory)
+                         log_results=not decode_hp.decode_in_memory,
+                         checkpoint_path=checkpoint_path)
 
     if decode_hp.decode_in_memory:
       output_dirs = [output_dir]
@@ -198,7 +204,8 @@ def decode_from_dataset(estimator,
       hparams=hparams,
       decode_hparams=decode_hp,
       predictions=predictions
-  ))
+  ), dataset_split)
+  return predictions
 
 
 def decode_once(estimator,
@@ -208,11 +215,13 @@ def decode_once(estimator,
                 decode_hp,
                 decode_to_file,
                 output_dir,
-                log_results=True):
+                log_results=True,
+                checkpoint_path=None):
   """Decodes once."""
 
   # Get the predictions as an iterable
-  predictions = estimator.predict(infer_input_fn)
+  predictions = estimator.predict(infer_input_fn,
+                                  checkpoint_path=checkpoint_path)
 
   if not log_results:
     return list(predictions)
@@ -421,6 +430,20 @@ def decode_from_file(estimator,
   outfile = tf.gfile.Open(decode_filename, "w")
   for index in range(len(sorted_inputs)):
     outfile.write("%s%s" % (decodes[sorted_keys[index]], decode_hp.delimiter))
+  outfile.flush()
+  outfile.close()
+
+  output_dir = os.path.join(estimator.model_dir, "decode")
+  tf.gfile.MakeDirs(output_dir)
+
+  run_postdecode_hooks(DecodeHookArgs(
+      estimator=estimator,
+      problem=hparams.problem,
+      output_dirs=[output_dir],
+      hparams=hparams,
+      decode_hparams=decode_hp,
+      predictions=list(result_iter)
+  ), None)
 
 
 def _decode_filename(base_filename, problem_name, decode_hp):
@@ -463,7 +486,8 @@ def decode_interactively(estimator, hparams, decode_hp, checkpoint_path=None):
   is_image = "image" in hparams.problem.name
   is_text2class = isinstance(hparams.problem,
                              text_problems.Text2ClassProblem)
-  skip_eos_postprocess = is_image or is_text2class
+  skip_eos_postprocess = (
+      is_image or is_text2class or decode_hp.skip_eos_postprocess)
 
   def input_fn():
     gen_fn = make_input_fn_from_generator(
@@ -531,20 +555,16 @@ def _decode_batch_input_fn(num_decode_batches, sorted_inputs, vocabulary,
 
 def _interactive_input_fn(hparams, decode_hp):
   """Generator that reads from the terminal and yields "interactive inputs".
-
   Due to temporary limitations in tf.learn, if we don't want to reload the
   whole graph, then we are stuck encoding all of the input as one fixed-size
   numpy array.
-
   We yield int32 arrays with shape [const_array_size].  The format is:
   [num_samples, decode_length, len(input ids), <input ids>, <padding>]
-
   Args:
     hparams: model hparams
     decode_hp: decode hparams
   Yields:
     numpy arrays
-
   Raises:
     Exception: when `input_type` is invalid.
   """
@@ -643,16 +663,13 @@ def show_and_save_image(img, save_path):
 
 def _get_sorted_inputs(filename, num_shards=1, delimiter="\n"):
   """Returning inputs sorted according to length.
-
   Args:
     filename: path to file with inputs, 1 per line.
     num_shards: number of input shards. If > 1, will read from file filename.XX,
       where XX is FLAGS.worker_id.
     delimiter: str, delimits records in the file.
-
   Returns:
     a sorted list of inputs
-
   """
   tf.logging.info("Getting sorted inputs")
   # read file and sort inputs according them according to input length.
@@ -694,11 +711,9 @@ def _save_until_eos(ids, skip=False):
 
 def _interactive_input_tensor_to_features_dict(feature_map, hparams):
   """Convert the interactive input format (see above) to a dictionary.
-
   Args:
     feature_map: dict with inputs.
     hparams: model hyperparameters
-
   Returns:
     a features dictionary, as expected by the decoder.
   """
@@ -735,11 +750,9 @@ def _interactive_input_tensor_to_features_dict(feature_map, hparams):
 
 def _decode_input_tensor_to_features_dict(feature_map, hparams):
   """Convert the interactive input format (see above) to a dictionary.
-
   Args:
     feature_map: dict with inputs.
     hparams: model hyperparameters
-
   Returns:
     a features dictionary, as expected by the decoder.
   """
@@ -779,7 +792,7 @@ class DecodeHookArgs(collections.namedtuple(
   pass
 
 
-def run_postdecode_hooks(decode_hook_args):
+def run_postdecode_hooks(decode_hook_args, dataset_split):
   """Run hooks after decodes have run."""
   hooks = decode_hook_args.problem.decode_hooks
   if not hooks:
@@ -791,7 +804,10 @@ def run_postdecode_hooks(decode_hook_args):
     return
   tf.logging.info("Running decode hooks.")
   parent_dir = os.path.join(decode_hook_args.output_dirs[0], os.pardir)
-  final_dir = os.path.join(parent_dir, "decode")
+  child_dir = "decode"
+  if dataset_split is not None:
+    child_dir += "_{}".format(dataset_split)
+  final_dir = os.path.join(parent_dir, child_dir)
   summary_writer = tf.summary.FileWriter(final_dir)
 
   for hook in hooks:

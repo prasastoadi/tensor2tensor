@@ -26,6 +26,7 @@ import time
 import unicodedata
 import numpy as np
 import six
+import shutil
 # pylint: disable=redefined-builtin
 from six.moves import range
 from six.moves import zip
@@ -254,11 +255,14 @@ def _read_stepfiles_list(path_prefix, path_suffix=".index", min_steps=0):
       continue
     if steps < min_steps:
       continue
-    if not os.path.exists(filename):
+    if not tf.gfile.Exists(filename):
       tf.logging.info(filename + " was deleted, so skipping it")
       continue
-    stepfiles.append(StepFile(basename, os.path.getmtime(filename),
-                              os.path.getctime(filename), steps))
+    tf.gfile.MakeDirs('/tmp/stepfiles')
+    tf.gfile.Copy(filename, os.path.join('/tmp/stepfiles', os.path.basename(filename)))
+    stepfiles.append(StepFile(basename, tf.gfile.Stat(filename).mtime_nsec,
+                              os.path.getctime(os.path.join('/tmp/stepfiles', os.path.basename(filename))), steps))
+    shutil.rmtree('/tmp/stepfiles')
   return sorted(stepfiles, key=lambda x: -x.steps)
 
 
@@ -289,7 +293,7 @@ def stepfiles_iterator(path_prefix, wait_minutes=0, min_steps=0,
   """
   # Wildcard D*-[0-9]* does not match D/x-1, so if D is a directory let
   # path_prefix="D/".
-  if not path_prefix.endswith(os.sep) and os.path.isdir(path_prefix):
+  if not path_prefix.endswith(os.sep) and tf.gfile.IsDirectory(path_prefix):
     path_prefix += os.sep
   stepfiles = _read_stepfiles_list(path_prefix, path_suffix, min_steps)
   tf.logging.info("Found %d files with steps: %s",
