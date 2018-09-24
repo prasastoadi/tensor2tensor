@@ -44,14 +44,16 @@ def main(_):
 
   model_dir = os.path.expanduser(FLAGS.model_dir)
   output_dir = os.path.expanduser(FLAGS.output_dir)
+  tmp_output_dir = "/tmp/output_dir/"
   out_base_file = os.path.join(output_dir, "model.ckpt")
-
+  tmp_out_base_file = os.path.join(tmp_output_dir, "model.ckpt")
   # Copy flags.txt with the original time, so t2t-bleu can report correct
   # relative time.
-  tf.gfile.MakeDirs(FLAGS.output_dir)
-  if (not os.path.exists(os.path.join(output_dir, "flags.txt")) and
-      os.path.exists(os.path.join(model_dir, "flags.txt"))):
-    shutil.copy2(os.path.join(model_dir, "flags.txt"),
+  tf.gfile.MakeDirs(output_dir)
+  tf.gfile.MakeDirs(tmp_output_dir)
+  if (not tf.gfile.Exists(os.path.join(output_dir, "flags.txt")) and
+      tf.gfile.Exists(os.path.join(model_dir, "flags.txt"))):
+    tf.gfile.Copy(os.path.join(model_dir, "flags.txt"),
                  os.path.join(output_dir, "flags.txt"))
 
   models_processed = 0
@@ -75,6 +77,7 @@ def main(_):
       continue
 
     out_file = "%s-%d" % (out_base_file, model.steps)
+    tmp_out_file = "%s-%d" % (tmp_out_base_file, model.steps)
     tf_vars = []
     tf.logging.info("Averaging %s" % (out_file))
     for (name, value) in six.iteritems(avg_values):
@@ -97,14 +100,17 @@ def main(_):
         sess.run(assign_op, {p: value})
       tf.logging.info("Storing to %s" % out_file)
       saver.save(sess, out_base_file, global_step=global_step)
-    os.utime(out_file + ".index", (model.mtime, model.mtime))
-
+    tf.gfile.Copy(out_file + ".index", tmp_out_file + ".index")
+    os.utime(tmp_out_file + ".index", (model.mtime, model.mtime))
+    tf.gfile.Remove(out_file + ".index")
+    tf.gfile.Copy(tmp_out_file + ".index", out_file + ".index")
     tf.reset_default_graph()
     first_model = queue.popleft()
 
     reader = tf.contrib.framework.load_checkpoint(first_model.filename)
     for name in avg_values:
       avg_values[name] -= reader.get_tensor(name) / FLAGS.n
+  shutil.rmtree(tmp_output_dir)
 
 if __name__ == "__main__":
   tf.logging.set_verbosity(tf.logging.INFO)

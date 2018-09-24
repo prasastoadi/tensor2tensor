@@ -107,11 +107,11 @@ def main(_):
     raise ValueError(
         "Either --translation or --translations_dir must be specified.")
   transl_dir = os.path.expanduser(FLAGS.translations_dir)
-  if not os.path.exists(transl_dir):
+  if not tf.gfile.Exists(transl_dir):
     exit_time = time.time() + FLAGS.wait_minutes * 60
     tf.logging.info("Translation dir %s does not exist, waiting till %s.",
                     transl_dir, time.asctime(time.localtime(exit_time)))
-    while not os.path.exists(transl_dir):
+    while not tf.gfile.Exists(transl_dir):
       time.sleep(10)
       if time.time() > exit_time:
         raise ValueError("Translation dir %s does not exist" % transl_dir)
@@ -119,7 +119,7 @@ def main(_):
   last_step_file = os.path.join(FLAGS.event_dir, "last_evaluated_step.txt")
   if FLAGS.min_steps == -1:
     if tf.gfile.Exists(last_step_file):
-      with open(last_step_file) as ls_file:
+      with tf.gfile.Open(last_step_file) as ls_file:
         FLAGS.min_steps = int(ls_file.read())
     else:
       FLAGS.min_steps = 0
@@ -132,9 +132,9 @@ def main(_):
     # report_zero handling must be inside the for-loop,
     # so we are sure the transl_dir is already created.
     if FLAGS.report_zero:
-      all_files = (os.path.join(transl_dir, f) for f in os.listdir(transl_dir))
+      all_files = (os.path.join(transl_dir, f) for f in tf.gfile.ListDirectory(transl_dir))
       start_time = min(
-          os.path.getmtime(f) for f in all_files if os.path.isfile(f))
+          tf.gfile.Stat(f).mtime_nsec for f in all_files if not tf.gfile.IsDirectory(f))
       values = []
       if FLAGS.bleu_variant in ("uncased", "both"):
         values.append(tf.Summary.Value(
@@ -165,7 +165,7 @@ def main(_):
         summary=tf.Summary(value=values),
         wall_time=transl_file.mtime, step=transl_file.steps))
     writer.flush()
-    with open(last_step_file, "w") as ls_file:
+    with tf.gfile.Open(last_step_file, "w") as ls_file:
       ls_file.write(str(transl_file.steps) + "\n")
 
 

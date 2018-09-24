@@ -91,7 +91,7 @@ def decode(estimator, hparams, decode_hp):
                               decode_hp, FLAGS.decode_to_file,
                               checkpoint_path=FLAGS.checkpoint_path)
     if FLAGS.checkpoint_path and FLAGS.keep_timestamp:
-      ckpt_time = os.path.getmtime(FLAGS.checkpoint_path + ".index")
+      ckpt_time = os.gfile.Stat(FLAGS.checkpoint_path + ".index").mtime_nsec
       os.utime(FLAGS.decode_to_file, (ckpt_time, ckpt_time))
   else:
     decoding.decode_from_dataset(
